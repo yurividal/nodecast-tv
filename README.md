@@ -26,10 +26,8 @@ A modern, web-based IPTV player featuring Live TV, EPG, Movies (VOD), and Series
 
 1.  Clone the repository:
     ```bash
-    ```bash
     git clone https://github.com/yourusername/nodecast-tv.git
     cd nodecast-tv
-    ```
     ```
 
 2.  Install dependencies:

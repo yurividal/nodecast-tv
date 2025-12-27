@@ -1,5 +1,5 @@
 /**
- * Trev-TV Application Entry Point
+ * NodeCast TV Application Entry Point
  */
 
 class App {
