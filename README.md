@@ -63,12 +63,13 @@ You can run NodeCast TV easily using Docker.
         build: https://github.com/technomancer702/nodecast-tv.git#main
         container_name: nodecast-tv
         ports:
-          - "3000:3000"
+          - "3000:3000" # Host:Container
         volumes:
           - ./data:/app/data
         restart: unless-stopped
         environment:
           - NODE_ENV=production
+          - PORT=3000 # Optional: Internal container port
     ```
 
 2.  Run the container:
