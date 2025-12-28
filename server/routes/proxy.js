@@ -4,6 +4,10 @@ const { sources } = require('../db');
 const xtreamApi = require('../services/xtreamApi');
 const m3uParser = require('../services/m3uParser');
 const epgParser = require('../services/epgParser');
+const cache = require('../services/cache');
+
+// Default cache TTL: 24 hours
+const DEFAULT_MAX_AGE_HOURS = 24;
 
 /**
  * Proxy Xtream API calls
@@ -11,15 +15,38 @@ const epgParser = require('../services/epgParser');
  */
 router.get('/xtream/:sourceId/:action', async (req, res) => {
     try {
-        const source = sources.getById(req.params.sourceId);
+        const sourceId = req.params.sourceId;
+        const source = sources.getById(sourceId);
         if (!source || source.type !== 'xtream') {
             return res.status(404).json({ error: 'Xtream source not found' });
         }
 
-        const api = xtreamApi.createFromSource(source);
         const { action } = req.params;
-        const { category_id, stream_id, vod_id, series_id, limit } = req.query;
+        const { category_id, stream_id, vod_id, series_id, limit, refresh, maxAge } = req.query;
+        const forceRefresh = refresh === '1';
+        const maxAgeHours = parseInt(maxAge) || DEFAULT_MAX_AGE_HOURS;
+        const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
 
+        // Actions that should be cached
+        const cacheableActions = [
+            'live_categories', 'live_streams',
+            'vod_categories', 'vod_streams',
+            'series_categories', 'series'
+        ];
+
+        // Build cache key (include category_id if present)
+        const cacheKey = category_id ? `${action}_${category_id}` : action;
+
+        // Check cache for cacheable actions
+        if (!forceRefresh && cacheableActions.includes(action)) {
+            const cached = cache.get('xtream', sourceId, cacheKey, maxAgeMs);
+            if (cached) {
+                return res.json(cached);
+            }
+        }
+
+        // Fetch fresh data
+        const api = xtreamApi.createFromSource(source);
         let data;
         switch (action) {
             case 'auth':
@@ -54,6 +81,11 @@ router.get('/xtream/:sourceId/:action', async (req, res) => {
                 break;
             default:
                 return res.status(400).json({ error: 'Unknown action' });
+        }
+
+        // Cache the result for cacheable actions
+        if (cacheableActions.includes(action)) {
+            cache.set('xtream', sourceId, cacheKey, data);
         }
 
         res.json(data);
@@ -92,12 +124,29 @@ router.get('/xtream/:sourceId/stream/:streamId/:type?', (req, res) => {
  */
 router.get('/m3u/:sourceId', async (req, res) => {
     try {
-        const source = sources.getById(req.params.sourceId);
+        const sourceId = req.params.sourceId;
+        const source = sources.getById(sourceId);
         if (!source || source.type !== 'm3u') {
             return res.status(404).json({ error: 'M3U source not found' });
         }
 
+        const forceRefresh = req.query.refresh === '1';
+        const maxAgeHours = parseInt(req.query.maxAge) || DEFAULT_MAX_AGE_HOURS;
+        const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+
+        // Check cache
+        if (!forceRefresh) {
+            const cached = cache.get('m3u', sourceId, 'playlist', maxAgeMs);
+            if (cached) {
+                return res.json(cached);
+            }
+        }
+
         const data = await m3uParser.fetchAndParse(source.url);
+
+        // Store in cache
+        cache.set('m3u', sourceId, 'playlist', data);
+
         res.json(data);
     } catch (err) {
         console.error('M3U proxy error:', err);
@@ -106,13 +155,7 @@ router.get('/m3u/:sourceId', async (req, res) => {
 });
 
 /**
- * EPG cache - in-memory for performance
- * Structure: { [sourceId]: { data, fetchedAt } }
- */
-const epgMemoryCache = {};
-
-/**
- * Fetch and parse EPG (with caching)
+ * Fetch and parse EPG (with file-based caching)
  * GET /api/proxy/epg/:sourceId
  * Query params:
  *   - refresh=1  Force refresh, bypass cache
@@ -127,15 +170,14 @@ router.get('/epg/:sourceId', async (req, res) => {
         }
 
         const forceRefresh = req.query.refresh === '1';
-        const maxAgeHours = parseInt(req.query.maxAge) || 24;
+        const maxAgeHours = parseInt(req.query.maxAge) || DEFAULT_MAX_AGE_HOURS;
         const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
 
-        // Check cache (unless force refresh)
-        if (!forceRefresh && epgMemoryCache[sourceId]) {
-            const cached = epgMemoryCache[sourceId];
-            const age = Date.now() - cached.fetchedAt;
-            if (age < maxAgeMs) {
-                return res.json(cached.data);
+        // Check file cache (unless force refresh)
+        if (!forceRefresh) {
+            const cached = cache.get('epg', sourceId, 'data', maxAgeMs);
+            if (cached) {
+                return res.json(cached);
             }
         }
 
@@ -148,11 +190,8 @@ router.get('/epg/:sourceId', async (req, res) => {
 
         const data = await epgParser.fetchAndParse(url);
 
-        // Store in cache
-        epgMemoryCache[sourceId] = {
-            data,
-            fetchedAt: Date.now()
-        };
+        // Store in file cache
+        cache.set('epg', sourceId, 'data', data);
 
         res.json(data);
     } catch (err) {
@@ -162,12 +201,22 @@ router.get('/epg/:sourceId', async (req, res) => {
 });
 
 /**
- * Clear EPG cache for a source
+ * Clear cache for a source
+ * DELETE /api/proxy/cache/:sourceId
+ */
+router.delete('/cache/:sourceId', (req, res) => {
+    const sourceId = req.params.sourceId;
+    cache.clearSource(sourceId);
+    res.json({ success: true });
+});
+
+/**
+ * Clear EPG cache for a source (legacy endpoint, calls clearSource)
  * DELETE /api/proxy/epg/:sourceId/cache
  */
 router.delete('/epg/:sourceId/cache', (req, res) => {
     const sourceId = req.params.sourceId;
-    delete epgMemoryCache[sourceId];
+    cache.clear('epg', sourceId, 'data');
     res.json({ success: true });
 });
 
@@ -266,9 +315,10 @@ router.get('/stream', async (req, res) => {
                         return `${req.protocol}://${req.get('host')}${req.baseUrl}/stream?url=${encodeURIComponent(absoluteUrl)}`;
                     } catch (e) { return line; }
                 }).join('\n');
-
-                return res.send(manifest);
             }
+
+            // Return manifest (whether rewritten or not)
+            return res.send(manifest);
         }
 
         // Binary content (segments)

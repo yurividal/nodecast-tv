@@ -106,6 +106,11 @@ const API = {
         epg: {
             get: (sourceId) => API.request('GET', `/proxy/epg/${sourceId}`),
             getForChannels: (sourceId, channelIds) => API.request('POST', `/proxy/epg/${sourceId}/channels`, { channelIds })
+        },
+
+        // Cache management
+        cache: {
+            clear: (sourceId) => API.request('DELETE', `/proxy/cache/${sourceId}`)
         }
     }
 };

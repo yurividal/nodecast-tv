@@ -12,8 +12,13 @@ class GuidePage {
     }
 
     async show() {
-        // Always reload EPG data when page is shown to ensure fresh data
-        await this.app.epgGuide.loadEpg();
+        // Only load EPG data if not already loaded
+        if (!this.app.epgGuide.programmes || this.app.epgGuide.programmes.length === 0) {
+            await this.app.epgGuide.loadEpg();
+        } else {
+            // Just re-render with existing data (updates time position)
+            this.app.epgGuide.render();
+        }
     }
 
     hide() {

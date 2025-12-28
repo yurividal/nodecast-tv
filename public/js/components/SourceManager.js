@@ -294,10 +294,13 @@ class SourceManager {
                 btn.textContent = '⏳';
             }
 
+            // Clear cache for this source first
+            await API.proxy.cache.clear(id);
+
             if (type === 'epg') {
-                // Force refresh EPG data (server-side cache will be bypassed)
+                // Force refresh EPG data
                 if (window.app?.epgGuide) {
-                    await window.app.epgGuide.loadEpg(true); // Force refresh
+                    await window.app.epgGuide.loadEpg(true);
                 }
                 alert('EPG data refreshed!');
             } else if (type === 'xtream') {
